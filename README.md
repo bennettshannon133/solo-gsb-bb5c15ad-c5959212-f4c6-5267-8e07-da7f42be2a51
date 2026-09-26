@@ -1,6 +1,6 @@
 # 🧶 编织行指令审校（Knit Row Review）
 
-一个用于校验编织逐行针数指令的 Web 应用：填写起始针数和逐行指令后，系统解析并展开每行，以上一行产出作为下一行的可用针数，逐行显示 **消耗 / 产出 / 剩余**；针数不匹配时**定位第一个无法执行的源指令**，并给出**短缺**或**未消耗**数量。编辑任一行后实时重算全部后续行，方案可导入 / 导出为 JSON。
+一个用于校验编织逐行针数指令的 Web 应用：填写起始针数和逐行指令后，系统解析并展开每行，以上一行产出作为下一行的可用针数，逐行显示 **消耗 / 产出 / 剩余**；针数不匹配时**定位第一个无法执行的源指令**，并给出**短缺**或**未消耗**数量。每行还提供 **针数变化来源** 视图：按源文本区间汇总每处 `incN` / `decN` 的实际执行次数、消耗 / 产出针数与净变化。编辑任一行后实时重算全部后续行，方案可导入 / 导出为 JSON。
 
 - 后端：Python 3.11 + FastAPI（解析、展开、逐行审校引擎）
 - 前端：原生 HTML / CSS / JavaScript（无构建、无前端框架）
@@ -85,6 +85,12 @@ k16                 # 耗 16 产 16
 
 - 左侧：起始针数、逐行指令编辑（添加 / 删除 / 上移 / 下移）、语法帮助；编辑后 250 ms 防抖自动重算，内容自动保存到浏览器 `localStorage`。
 - 右侧：汇总徽标（通过 / 未耗尽 / 短缺 / 语法错误 / 阻断数量与最终针数）与逐行卡片，含行之间的「上一行产出 → 本行可用」流向、消耗 / 产出 / 剩余指标、错误高亮、展开指令列表。
+- **针数变化来源**：每张「通过 / 未全部消耗」行卡片默认展开一张明细表，按源文本中的出现顺序列出每处 `incN` / `decN`：
+  - **执行次数**：固定重复块嵌套时次数逐层相乘；自适应块 `[...]*~N` 使用本行在展开前推导出的实际重复次数（推导为 0 次时该块不产生条目）；
+  - **消耗针数 / 产出针数 / 净变化**（加针为正、减针为负）；同一源区间因重复产生的多次执行合并为一行，字面相同但源位置不同的指令分列；
+  - 表尾显示**净变化合计**并与该行「产出 − 消耗」自动核对（✓ 核对一致 / ✗ 不一致）；
+  - **点击任一条目**会滚动定位到源文本中对应的 `inc` / `dec` 指令并闪烁高亮；
+  - 针数短缺、语法错误与已阻断的行不生成清单。
 - 顶部：**载入示例**、**导入 JSON**、**导出 JSON**。
 
 ### 方案 JSON 格式
@@ -166,6 +172,39 @@ curl -s -X POST http://localhost:8000/api/analyze \
 
 无法整除（如 20 针执行 `[k2]*~5`）时返回 `"status": "error"`，`error_pos` 指向 `*`（此处为列 4），错误信息说明剩余针数、目标保留针数、每轮消耗与不可整除关系，后续行为 `"blocked"`。
 
+### 针数变化来源字段
+
+`status` 为 `"ok"` / `"unconsumed"` 的行额外返回 `stitch_changes` 与 `stitch_change_net`；短缺 / 语法错误 / 阻断行为空清单且净变化为 0。`stitch_changes` 按源区间汇总每处 `incN` / `decN`，同一源区间的多次重复执行合并为一条：
+
+```bash
+curl -s -X POST http://localhost:8000/api/analyze \
+  -H 'Content-Type: application/json' \
+  -d '{"start_stitches": 20, "rows": ["[k3 dec2]*4"]}'
+```
+
+```json
+{
+  "status": "ok",
+  "consumed": 20,
+  "produced": 16,
+  "stitch_change_net": -4,
+  "stitch_changes": [
+    {
+      "type": "dec",
+      "text": "dec2",
+      "start": 4,
+      "end": 8,
+      "executions": 4,
+      "consumed": 8,
+      "produced": 4,
+      "net": -4
+    }
+  ]
+}
+```
+
+字段含义：`executions` 为实际执行次数（固定块嵌套逐层相乘、自适应块取推导出的实际次数，0 次时不出现该条目）；`consumed` / `produced` 为合计消耗与产出针数；`net = produced - consumed`。`stitch_change_net` 恒等于该行 `produced - consumed`（`kN` 净变化为 0，不计入清单）。`start` / `end` 为指令在源行中的 0 基列区间，前端据此实现点击定位。
+
 ---
 
 ## 本地开发（不使用 Docker）
@@ -173,14 +212,14 @@ curl -s -X POST http://localhost:8000/api/analyze \
 ```bash
 pip install -r requirements-dev.txt        # 含 pytest / httpx
 uvicorn app.main:app --reload --port 8000  # http://localhost:8000
-pytest -q                                   # 运行测试（47 个用例）
+pytest -q                                   # 运行测试（61 个用例）
 ```
 
 项目结构：
 
 ```text
 app/
-  engine.py           # 解析器（递归下降）、repeat 展开、自适应重复推导、逐行审校
+  engine.py           # 解析器（递归下降）、repeat 展开、自适应重复推导、逐行审校、针数变化来源汇总
   main.py             # FastAPI：/api/analyze、/api/health、静态托管
   static/
     index.html        # 页面结构

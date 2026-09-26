@@ -312,6 +312,39 @@ class AdaptiveBlock:
 
 
 @dataclass
+class StitchChangeEntry:
+    """源文本中一处 incN/decN 指令的“针数变化来源”汇总。
+
+    同一源区间因重复而产生的多次执行合并为一条（executions 记录实际次数）；
+    字面相同但源位置不同的指令各自一条。
+    """
+    type: Literal["inc", "dec"]
+    text: str  # 源指令文本，如 "inc3"
+    start: int  # 在源文本中的起始列（0 基，含）
+    end: int  # 结束列（0 基，不含）
+    executions: int  # 实际执行次数
+    consumed: int  # 合计消耗针数
+    produced: int  # 合计产出针数
+
+    @property
+    def net(self) -> int:
+        """净变化 = 产出 - 消耗（inc 为正、dec 为负）。"""
+        return self.produced - self.consumed
+
+    def to_dict(self) -> dict:
+        return {
+            "type": self.type,
+            "text": self.text,
+            "start": self.start,
+            "end": self.end,
+            "executions": self.executions,
+            "consumed": self.consumed,
+            "produced": self.produced,
+            "net": self.net,
+        }
+
+
+@dataclass
 class RowResult:
     index: int
     source: str
@@ -324,6 +357,9 @@ class RowResult:
     expanded_preview: list[str] = field(default_factory=list)
     expanded_truncated: bool = False
     adaptive_blocks: list[AdaptiveBlock] = field(default_factory=list)
+    # “针数变化来源”：仅通过 / 未全部消耗的行生成；其余状态为空列表。
+    stitch_changes: list[StitchChangeEntry] = field(default_factory=list)
+    stitch_change_net: int = 0  # 各来源净变化合计（应等于 produced - consumed）
     error: Optional[str] = None
     error_pos: Optional[int] = None  # 出错位置（0 基列）
     failing_instruction: Optional[str] = None  # 第一个无法执行的源指令文本
@@ -345,6 +381,8 @@ class RowResult:
             "expanded_preview": self.expanded_preview,
             "expanded_truncated": self.expanded_truncated,
             "adaptive_blocks": [b.to_dict() for b in self.adaptive_blocks],
+            "stitch_changes": [e.to_dict() for e in self.stitch_changes],
+            "stitch_change_net": self.stitch_change_net,
             "error": self.error,
             "error_pos": self.error_pos,
             "failing_instruction": self.failing_instruction,
@@ -356,6 +394,42 @@ class RowResult:
 
 
 PREVIEW_LIMIT = 200
+
+
+def collect_stitch_changes(nodes: list[InstructionNode],
+                           source: str) -> list[StitchChangeEntry]:
+    """按源文本区间汇总 inc/dec 的实际执行次数与针数变化。
+
+    固定重复块嵌套时执行次数逐层相乘；自适应块在审校阶段已回填本行推导出的
+    实际次数 n，此处与固定块同等对待。同一源区间（包括被重复执行多次的同一条
+    指令）合并为一条；字面相同但位置不同的指令分列。返回顺序按源区间排列。
+    """
+    entries: list[StitchChangeEntry] = []
+
+    def walk(node_list: list[InstructionNode], multiplier: int) -> None:
+        for node in node_list:
+            if node.type == "repeat":
+                # 固定/自适应块：外层倍数 × 本层次数（自适应 n 已在审校时回填）
+                walk(node.children, multiplier * node.n)
+            elif node.type in ("inc", "dec"):
+                if multiplier == 0:
+                    # 自适应块推导出实际重复 0 次时，块内指令一次也未执行，
+                    # 不产生来源条目（也不影响净变化合计）。
+                    continue
+                # 同一源区间的多次执行由此处的 multiplier 合并为一条；
+                # 不同叶子即使文本字面相同也各自生成一条（位置不同即分列）。
+                entries.append(StitchChangeEntry(
+                    type=node.type,
+                    text=source[node.start:node.end] or f"{node.type}{node.n}",
+                    start=node.start, end=node.end,
+                    executions=multiplier,
+                    consumed=node.consumed * multiplier,
+                    produced=node.produced * multiplier,
+                ))
+
+    walk(nodes, 1)
+    entries.sort(key=lambda e: (e.start, e.end))
+    return entries
 
 
 def _error_result(index: int, source: str, available: int, message: str,
@@ -504,11 +578,17 @@ def analyze_row(index: int, source: str, available: int, blocked: bool) -> RowRe
     total_consumed = sum(n.consumed for n in nodes)
     total_produced = sum(n.produced for n in nodes)
 
+    # 针数变化来源：仅整行指令都能执行（通过 / 未全部消耗）时生成；
+    # 短缺、语法错误与阻断行不生成清单。
+    stitch_changes = collect_stitch_changes(nodes, source)
+    stitch_change_net = sum(e.net for e in stitch_changes)
+
     result = RowResult(
         index=index, source=source, status="ok", available=available,
         consumed=total_consumed, produced=total_produced, remaining=total_produced,
         expanded_count=leaf_total, expanded_preview=preview,
         expanded_truncated=truncated, adaptive_blocks=adaptive_blocks,
+        stitch_changes=stitch_changes, stitch_change_net=stitch_change_net,
     )
     if total_consumed < available:
         result.status = "unconsumed"

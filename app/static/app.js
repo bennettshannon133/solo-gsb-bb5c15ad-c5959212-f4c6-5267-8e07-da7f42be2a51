@@ -196,6 +196,14 @@ function renderSource(row) {
         + `产出 ${b.per_pass_produced} 针">实际重复 ${b.actual_repeats} 次</span>`,
     });
   });
+  // “针数变化来源”：给每个 inc/dec 源区间加上可点击定位的标记
+  (row.stitch_changes || []).forEach((e) => {
+    marks.push({
+      start: e.start, end: e.end,
+      html: `<span class="src-hit sc-${e.type}" data-sc-start="${e.start}" data-sc-end="${e.end}"`
+        + ` title="点击下方来源清单条目可定位到此处">${escapeHtml(src.slice(e.start, e.end))}</span>`,
+    });
+  });
   if (marks.length === 0) return escapeHtml(src);
   // 按起点排序后顺序重建；标记区间互不重叠（短缺叶子在另一节点内，
   // 自适应徽标挂在块末尾，▲ 在出错运算符处）。
@@ -259,6 +267,7 @@ function renderSummary(rows) {
 function renderCard(row, i) {
   const card = document.createElement("div");
   card.className = `row-card ${row.status}`;
+  card.dataset.rowIdx = String(i);
 
   const head = document.createElement("div");
   head.className = "row-card-head";
@@ -298,6 +307,10 @@ function renderCard(row, i) {
     card.appendChild(msg);
   }
 
+  if ((row.status === "ok" || row.status === "unconsumed") && Array.isArray(row.stitch_changes)) {
+    card.appendChild(renderStitchChanges(row));
+  }
+
   if (row.expanded_count > 0) {
     const det = document.createElement("details");
     det.className = "expanded";
@@ -317,6 +330,87 @@ function renderCard(row, i) {
   }
 
   return card;
+}
+
+// ---------------------------------------------------------------- 针数变化来源
+function fmtNet(v) {
+  if (v > 0) return `+${v}`;
+  return String(v);
+}
+
+function renderStitchChanges(row) {
+  const det = document.createElement("details");
+  det.className = "stitch-changes";
+  det.open = true;
+
+  const entries = row.stitch_changes;
+  const summary = document.createElement("summary");
+  summary.textContent = `针数变化来源（${entries.length} 处 inc/dec）`;
+  det.appendChild(summary);
+
+  if (entries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "sc-empty";
+    empty.textContent = "本行没有 inc / dec 指令，针数无变化来源。";
+    det.appendChild(empty);
+    return det;
+  }
+
+  const table = document.createElement("table");
+  table.className = "sc-table";
+  table.innerHTML =
+    `<thead><tr>`
+    + `<th>源指令</th><th>执行次数</th><th>消耗针数</th><th>产出针数</th><th>净变化</th>`
+    + `</tr></thead>`;
+  const tbody = document.createElement("tbody");
+  entries.forEach((e) => {
+    const tr = document.createElement("tr");
+    tr.className = "sc-row";
+    tr.dataset.start = String(e.start);
+    tr.dataset.end = String(e.end);
+    tr.title = "点击定位到源文本中的该指令";
+    const typeLabel = e.type === "inc" ? "加针" : "减针";
+    tr.innerHTML =
+      `<td><span class="sc-type sc-type-${e.type}">${typeLabel}</span> `
+      + `<code>${escapeHtml(e.text)}</code></td>`
+      + `<td class="num">${e.executions}</td>`
+      + `<td class="num">${e.consumed}</td>`
+      + `<td class="num">${e.produced}</td>`
+      + `<td class="num sc-net ${e.net > 0 ? "pos" : e.net < 0 ? "neg" : "zero"}">${fmtNet(e.net)}</td>`;
+    tr.addEventListener("click", () => locateSource(row, e.start, e.end));
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  det.appendChild(table);
+
+  // 每行净变化合计，并与该行“产出 - 消耗”核对
+  const expectedNet = row.produced - row.consumed;
+  const matched = row.stitch_change_net === expectedNet;
+  const foot = document.createElement("div");
+  foot.className = "sc-foot";
+  foot.innerHTML =
+    `净变化合计 <b class="${row.stitch_change_net > 0 ? "pos" : row.stitch_change_net < 0 ? "neg" : "zero"}">`
+    + `${fmtNet(row.stitch_change_net)}</b> 针`
+    + `（产出 ${row.produced} − 消耗 ${row.consumed} = ${fmtNet(expectedNet)}）`
+    + (matched
+      ? `<span class="sc-check ok">✓ 核对一致</span>`
+      : `<span class="sc-check bad">✗ 与产出−消耗不一致</span>`);
+  det.appendChild(foot);
+
+  return det;
+}
+
+function locateSource(row, start, end) {
+  const card = document.querySelector(`[data-row-idx="${row.index}"]`);
+  if (!card) return;
+  const hit = card.querySelector(`.src-hit[data-sc-start="${start}"][data-sc-end="${end}"]`);
+  if (!hit) return;
+  hit.scrollIntoView({ behavior: "smooth", block: "center" });
+  hit.classList.remove("flash");
+  // 强制重排以重新触发动画
+  void hit.offsetWidth;
+  hit.classList.add("flash");
+  setTimeout(() => hit.classList.remove("flash"), 1600);
 }
 
 // ---------------------------------------------------------------- 导入导出

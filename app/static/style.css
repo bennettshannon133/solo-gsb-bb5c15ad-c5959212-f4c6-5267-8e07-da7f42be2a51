@@ -275,6 +275,93 @@ body {
 }
 .trunc-note { font-size: 12px; color: var(--warn); margin-top: 4px; }
 
+/* ---------------- 针数变化来源 ---------------- */
+.stitch-changes { margin-top: 8px; }
+.stitch-changes > summary {
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--muted);
+}
+.sc-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 6px;
+  font-size: 12.5px;
+  background: rgba(255,255,255,.7);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.sc-table th, .sc-table td {
+  padding: 5px 9px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.sc-table th {
+  font-weight: 600;
+  color: var(--muted);
+  background: rgba(0,0,0,.025);
+}
+.sc-table td.num, .sc-table th:nth-child(2),
+.sc-table th:nth-child(3), .sc-table th:nth-child(4),
+.sc-table th:nth-child(5) { text-align: right; font-variant-numeric: tabular-nums; }
+.sc-table td code {
+  font-family: var(--mono);
+  background: var(--bg);
+  padding: 0 5px;
+  border-radius: 4px;
+}
+.sc-type {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0 6px;
+  border-radius: 999px;
+  margin-right: 2px;
+}
+.sc-type-inc { color: #fff; background: var(--ok); }
+.sc-type-dec { color: #fff; background: var(--accent); }
+.sc-net.pos { color: var(--ok); font-weight: 700; }
+.sc-net.neg { color: var(--err); font-weight: 700; }
+.sc-net.zero { color: var(--muted); }
+tr.sc-row { cursor: pointer; transition: background .12s; }
+tr.sc-row:hover { background: rgba(181, 101, 74, .1); }
+tr.sc-row.selected { background: rgba(181, 101, 74, .18); }
+.sc-foot {
+  font-size: 12.5px;
+  margin-top: 6px;
+  color: var(--muted);
+}
+.sc-foot b { font-variant-numeric: tabular-nums; }
+.sc-foot b.pos { color: var(--ok); }
+.sc-foot b.neg { color: var(--err); }
+.sc-foot b.zero { color: var(--muted); }
+.sc-check {
+  display: inline-block;
+  margin-left: 8px;
+  font-weight: 600;
+}
+.sc-check.ok { color: var(--ok); }
+.sc-check.bad { color: var(--err); }
+.sc-empty { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+
+/* 源文本中可定位的 inc/dec 区间 */
+.row-source .src-hit {
+  border-radius: 3px;
+  padding: 0 2px;
+  cursor: default;
+}
+.row-source .src-hit.sc-inc { box-shadow: 0 0 0 1px rgba(61, 139, 95, .55); }
+.row-source .src-hit.sc-dec { box-shadow: 0 0 0 1px rgba(181, 101, 74, .6); }
+.row-source .src-hit.flash {
+  animation: sc-flash 1.6s ease-out;
+}
+@keyframes sc-flash {
+  0%   { background: #f5d25a; box-shadow: 0 0 0 2px #d9a92e; }
+  70%  { background: #f5d25a; box-shadow: 0 0 0 2px #d9a92e; }
+  100% { background: transparent; }
+}
+
 .empty-hint {
   color: var(--muted);
   font-size: 14px;
