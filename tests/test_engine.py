@@ -327,3 +327,121 @@ def test_to_dict_keys():
     rr = analyze_row(0, "k1", 1, False)
     d = rr.to_dict()
     assert d["status"] == "ok" and d["remaining"] == 1
+
+
+# ---------------------------------------------------------------- 针数变化来源
+def test_stitch_changes_basic_entries():
+    # inc3 耗1产3、dec2 耗2产1；k2 无净变化，不列入清单
+    rr = analyze_row(0, "inc3 dec2 k2", 10, False)
+    assert rr.status == "unconsumed"  # 消耗 5 < 可用 10
+    assert [
+        (c.instruction, c.executions, c.consumed, c.produced, c.net)
+        for c in rr.stitch_changes
+    ] == [("inc3", 1, 1, 3, 2), ("dec2", 1, 2, 1, -1)]
+    assert [(c.start, c.end) for c in rr.stitch_changes] == [(0, 4), (5, 9)]
+    assert rr.stitch_net == 1 == rr.produced - rr.consumed
+
+
+def test_stitch_changes_fixed_repeat_merges_executions():
+    # 同一源区间的多次执行合并为一条
+    rr = analyze_row(0, "[inc2 k1]*3", 6, False)
+    assert rr.status == "ok"
+    assert len(rr.stitch_changes) == 1
+    c = rr.stitch_changes[0]
+    assert c.instruction == "inc2" and (c.start, c.end) == (1, 5)
+    assert c.executions == 3 and c.consumed == 3 and c.produced == 6 and c.net == 3
+    assert rr.stitch_net == 3 == rr.produced - rr.consumed
+
+
+def test_stitch_changes_nested_fixed_repeat_multiplies():
+    # 固定块嵌套：执行次数逐层相乘，inc2 共 2×3=6 次
+    rr = analyze_row(0, "[[inc2]*2 k1]*3", 9, False)
+    assert rr.status == "ok"
+    assert len(rr.stitch_changes) == 1
+    c = rr.stitch_changes[0]
+    assert c.executions == 6 and c.consumed == 6 and c.produced == 12 and c.net == 6
+    assert rr.stitch_net == 6 == rr.produced - rr.consumed
+
+
+def test_stitch_changes_adaptive_uses_actual_repeats():
+    # 自适应块使用本行推导出的实际次数：(10-4)/1 = 6 轮
+    rr = analyze_row(0, "[inc2]*~4 k4", 10, False)
+    assert rr.status == "ok"
+    assert rr.adaptive_blocks[0].actual_repeats == 6
+    assert len(rr.stitch_changes) == 1
+    c = rr.stitch_changes[0]
+    assert c.instruction == "inc2" and (c.start, c.end) == (1, 5)
+    assert c.executions == 6 and c.consumed == 6 and c.produced == 12 and c.net == 6
+    assert rr.stitch_net == 6 == rr.produced - rr.consumed
+
+
+def test_stitch_changes_adaptive_with_nested_fixed_block():
+    # 自适应块内嵌套固定块：[[inc2]*2 k1]*~5，每轮耗 3；20 针 => (20-5)/3=5 轮，
+    # inc2 共 5×2=10 次
+    rr = analyze_row(0, "[[inc2]*2 k1]*~5 k5", 20, False)
+    assert rr.status == "ok"
+    assert rr.adaptive_blocks[0].actual_repeats == 5
+    assert len(rr.stitch_changes) == 1
+    c = rr.stitch_changes[0]
+    assert c.executions == 10 and c.consumed == 10 and c.produced == 20 and c.net == 10
+    assert rr.stitch_net == 10 == rr.produced - rr.consumed
+
+
+def test_stitch_changes_same_text_different_positions_listed_separately():
+    # 字面相同但位置不同的指令分列
+    rr = analyze_row(0, "inc2 k1 inc2", 10, False)
+    assert len(rr.stitch_changes) == 2
+    a, b = rr.stitch_changes
+    assert a.instruction == b.instruction == "inc2"
+    assert (a.start, a.end) == (0, 4) and (b.start, b.end) == (8, 12)
+    assert a.executions == b.executions == 1
+    assert rr.stitch_net == 2 == rr.produced - rr.consumed
+
+
+def test_stitch_changes_mixed_inc_dec_in_repeat():
+    # [k2 inc1 dec2]*2：inc1 两次净 0，dec2 两次净 -2
+    rr = analyze_row(0, "[k2 inc1 dec2]*2", 10, False)
+    assert rr.status == "ok"
+    assert [
+        (c.instruction, c.executions, c.consumed, c.produced, c.net)
+        for c in rr.stitch_changes
+    ] == [("inc1", 2, 2, 2, 0), ("dec2", 2, 4, 2, -2)]
+    assert rr.stitch_net == -2 == rr.produced - rr.consumed
+
+
+def test_stitch_changes_zero_repeat_adaptive_not_listed():
+    # 自适应块推导出 0 次：内部指令未执行，不列入清单
+    rr = analyze_row(0, "k3 [inc2]*~7 k7", 10, False)
+    assert rr.status == "ok"
+    assert rr.adaptive_blocks[0].actual_repeats == 0
+    assert rr.stitch_changes == []
+    assert rr.stitch_net == 0 == rr.produced - rr.consumed
+
+
+def test_stitch_changes_not_generated_for_failed_or_blocked_rows():
+    # 短缺行与其后的阻断行都不生成清单
+    results = analyze_plan(4, ["dec5 inc3", "inc2"])
+    assert results[0].status == "shortage"
+    assert results[0].stitch_changes == [] and results[0].stitch_net is None
+    assert results[1].status == "blocked"
+    assert results[1].stitch_changes == [] and results[1].stitch_net is None
+
+    # 语法错误行（含自适应推导失败）同样不生成清单
+    err = analyze_row(0, "inc", 4, False)
+    assert err.status == "error"
+    assert err.stitch_changes == [] and err.stitch_net is None
+    err = analyze_row(0, "[k1 inc2]*~5", 20, False)  # (20-5) 不能被每轮消耗 2 整除
+    assert err.status == "error"
+    assert err.stitch_changes == [] and err.stitch_net is None
+
+
+def test_stitch_changes_to_dict_payload():
+    d = analyze_row(0, "[inc2]*2", 2, False).to_dict()
+    assert d["stitch_net"] == 2
+    assert d["stitch_changes"] == [
+        {"start": 1, "end": 5, "instruction": "inc2", "executions": 2,
+         "consumed": 2, "produced": 4, "net": 2},
+    ]
+    # 失败行的序列化结果同样为空清单 + null
+    d = analyze_row(0, "dec9", 2, False).to_dict()
+    assert d["stitch_changes"] == [] and d["stitch_net"] is None

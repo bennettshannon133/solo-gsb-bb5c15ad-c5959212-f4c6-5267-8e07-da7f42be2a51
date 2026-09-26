@@ -172,10 +172,10 @@ function escapeHtml(s) {
   }[c]));
 }
 
-function renderSource(row) {
+function renderSource(row, locate) {
   const src = row.source;
   // 收集需要插入源文本的标记：短缺高亮（区间替换）、语法错误 ▲、
-  // 自适应块后面的“实际重复 M 次”徽标（纯插入）。
+  // 自适应块后面的“实际重复 M 次”徽标（纯插入）、针数变化来源定位高亮。
   const marks = [];
   if (row.status === "shortage" && row.failing_start != null) {
     const [a, b] = [row.failing_start, row.failing_end];
@@ -196,6 +196,13 @@ function renderSource(row) {
         + `产出 ${b.per_pass_produced} 针">实际重复 ${b.actual_repeats} 次</span>`,
     });
   });
+  if (locate && locate.start != null) {
+    const [a, b] = [locate.start, locate.end];
+    marks.push({
+      start: a, end: b,
+      html: `<span class="locate-hl" title="针数变化来源">${escapeHtml(src.slice(a, b))}</span>`,
+    });
+  }
   if (marks.length === 0) return escapeHtml(src);
   // 按起点排序后顺序重建；标记区间互不重叠（短缺叶子在另一节点内，
   // 自适应徽标挂在块末尾，▲ 在出错运算符处）。
@@ -256,6 +263,84 @@ function renderSummary(rows) {
   els.summary.innerHTML = badges.map((b) => `<span class="badge">${b}</span>`).join("");
 }
 
+function fmtNet(n) {
+  return (n > 0 ? "+" : "") + n;
+}
+
+// 针数变化来源清单：仅 ok / unconsumed 行生成（stitch_net 不为 null）。
+// 点击条目在源文本中高亮对应指令区间，再次点击取消。
+function renderStitchChanges(row, sourceEl) {
+  const det = document.createElement("details");
+  det.className = "stitch-changes";
+  det.open = true;
+
+  const expected = row.produced - row.consumed;
+  const match = row.stitch_net === expected;
+  const sum = document.createElement("summary");
+  sum.innerHTML =
+    `针数变化来源 · 净变化合计 <b class="${row.stitch_net >= 0 ? "net-pos" : "net-neg"}">`
+    + `${fmtNet(row.stitch_net)}</b> `
+    + (match
+      ? `<span class="sc-check ok-check">✓ 与 产出 ${row.produced} − 消耗 ${row.consumed} 相符</span>`
+      : `<span class="sc-check bad-check">✗ 产出 − 消耗 为 ${fmtNet(expected)}，不一致</span>`);
+  det.appendChild(sum);
+
+  const entries = row.stitch_changes || [];
+  if (entries.length === 0) {
+    const note = document.createElement("div");
+    note.className = "sc-empty";
+    note.textContent = "本行没有加针 / 减针指令，针数无净变化。";
+    det.appendChild(note);
+    return det;
+  }
+
+  const table = document.createElement("table");
+  table.className = "sc-table";
+  table.innerHTML =
+    "<thead><tr><th>指令</th><th>执行次数</th><th>消耗针数</th><th>产出针数</th><th>净变化</th></tr></thead>";
+  const tbody = document.createElement("tbody");
+
+  let activeTr = null;
+  entries.forEach((e) => {
+    const tr = document.createElement("tr");
+    tr.className = "sc-entry";
+    tr.title = `源文本第 ${e.start + 1}–${e.end} 列，点击定位原文`;
+    tr.innerHTML =
+      `<td><code class="sc-inst">${escapeHtml(e.instruction)}</code></td>` +
+      `<td>${e.executions}</td>` +
+      `<td>${e.consumed}</td>` +
+      `<td>${e.produced}</td>` +
+      `<td class="${e.net >= 0 ? "net-pos" : "net-neg"}">${fmtNet(e.net)}</td>`;
+    tr.addEventListener("click", () => {
+      if (activeTr === tr) {
+        activeTr = null;
+        tr.classList.remove("active");
+        sourceEl.innerHTML = renderSource(row);
+        return;
+      }
+      if (activeTr) activeTr.classList.remove("active");
+      activeTr = tr;
+      tr.classList.add("active");
+      sourceEl.innerHTML = renderSource(row, { start: e.start, end: e.end });
+      sourceEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+
+  const tfoot = document.createElement("tfoot");
+  const sumExec = entries.reduce((a, e) => a + e.executions, 0);
+  const sumCon = entries.reduce((a, e) => a + e.consumed, 0);
+  const sumPro = entries.reduce((a, e) => a + e.produced, 0);
+  tfoot.innerHTML =
+    `<tr><td>合计</td><td>${sumExec}</td><td>${sumCon}</td><td>${sumPro}</td>`
+    + `<td class="${row.stitch_net >= 0 ? "net-pos" : "net-neg"}">${fmtNet(row.stitch_net)}</td></tr>`;
+  table.appendChild(tfoot);
+
+  det.appendChild(table);
+  return det;
+}
+
 function renderCard(row, i) {
   const card = document.createElement("div");
   card.className = `row-card ${row.status}`;
@@ -289,6 +374,10 @@ function renderCard(row, i) {
     }
     m.innerHTML = parts.join("");
     card.appendChild(m);
+  }
+
+  if (row.stitch_net != null) {
+    card.appendChild(renderStitchChanges(row, source));
   }
 
   if (row.error) {

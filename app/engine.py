@@ -286,6 +286,69 @@ def expand_tokens(nodes: list[InstructionNode], limit: int = MAX_EXPANDED_LEAVES
 
 
 # --------------------------------------------------------------------------- #
+# 针数变化来源汇总
+# --------------------------------------------------------------------------- #
+@dataclass
+class StitchChange:
+    """源文本中一处 inc/dec 指令的针数变化汇总（同一区间的多次执行已合并）。"""
+    start: int  # 指令在源文本中的起始列（0 基，含）
+    end: int  # 结束列（0 基，不含）
+    instruction: str  # 源文本切片，如 "inc2"
+    executions: int = 0  # 实际执行次数（固定块逐层相乘，自适应块用推导出的次数）
+    consumed: int = 0  # 合计消耗针数
+    produced: int = 0  # 合计产出针数
+
+    @property
+    def net(self) -> int:
+        """净变化 = 产出 - 消耗。"""
+        return self.produced - self.consumed
+
+    def to_dict(self) -> dict:
+        return {
+            "start": self.start,
+            "end": self.end,
+            "instruction": self.instruction,
+            "executions": self.executions,
+            "consumed": self.consumed,
+            "produced": self.produced,
+            "net": self.net,
+        }
+
+
+def collect_stitch_changes(nodes: list[InstructionNode], source: str) -> list[StitchChange]:
+    """按源区间汇总本行每处 inc/dec 指令的执行次数与针数变化，按源顺序返回。
+
+    - 固定重复块嵌套时执行次数逐层相乘；自适应块的 n 已在审校阶段回填为
+      本行推导出的实际重复次数，直接参与乘积。
+    - 同一源区间的多次执行合并为一条；区间不同（即使字面相同）的指令分列。
+    - 实际执行 0 次（如自适应块推导出 0 次）的指令不产生针数变化，不列入。
+    调用前需确保自适应块已完成推导（analyze_row 中成功路径满足）。
+    """
+    merged: dict[tuple[int, int], StitchChange] = {}
+
+    def walk(ns: list[InstructionNode], mult: int) -> None:
+        if mult == 0:
+            return
+        for node in ns:
+            if node.type == "repeat":
+                walk(node.children, mult * node.n)
+            elif node.type in ("inc", "dec"):
+                key = (node.start, node.end)
+                entry = merged.get(key)
+                if entry is None:
+                    entry = merged[key] = StitchChange(
+                        start=node.start, end=node.end,
+                        instruction=source[node.start:node.end],
+                    )
+                entry.executions += mult
+                entry.consumed += node.consumed * mult
+                entry.produced += node.produced * mult
+
+    walk(nodes, 1)
+    return [merged[key] for key in sorted(merged)]
+
+
+# --------------------------------------------------------------------------- #
 # 逐行审校
 # --------------------------------------------------------------------------- #
 @dataclass
@@ -324,6 +387,10 @@ class RowResult:
     expanded_preview: list[str] = field(default_factory=list)
     expanded_truncated: bool = False
     adaptive_blocks: list[AdaptiveBlock] = field(default_factory=list)
+    # 针数变化来源清单：仅 ok / unconsumed 行生成；shortage / error / blocked
+    # 行不生成清单（空列表且 stitch_net 为 None）。
+    stitch_changes: list[StitchChange] = field(default_factory=list)
+    stitch_net: Optional[int] = None  # 净变化合计（应等于 产出 - 消耗，供核对）
     error: Optional[str] = None
     error_pos: Optional[int] = None  # 出错位置（0 基列）
     failing_instruction: Optional[str] = None  # 第一个无法执行的源指令文本
@@ -345,6 +412,8 @@ class RowResult:
             "expanded_preview": self.expanded_preview,
             "expanded_truncated": self.expanded_truncated,
             "adaptive_blocks": [b.to_dict() for b in self.adaptive_blocks],
+            "stitch_changes": [c.to_dict() for c in self.stitch_changes],
+            "stitch_net": self.stitch_net,
             "error": self.error,
             "error_pos": self.error_pos,
             "failing_instruction": self.failing_instruction,
@@ -504,11 +573,14 @@ def analyze_row(index: int, source: str, available: int, blocked: bool) -> RowRe
     total_consumed = sum(n.consumed for n in nodes)
     total_produced = sum(n.produced for n in nodes)
 
+    # 针数变化来源：此时自适应块的实际重复次数已回填，直接按节点树汇总。
+    changes = collect_stitch_changes(nodes, source)
     result = RowResult(
         index=index, source=source, status="ok", available=available,
         consumed=total_consumed, produced=total_produced, remaining=total_produced,
         expanded_count=leaf_total, expanded_preview=preview,
         expanded_truncated=truncated, adaptive_blocks=adaptive_blocks,
+        stitch_changes=changes, stitch_net=sum(c.net for c in changes),
     )
     if total_consumed < available:
         result.status = "unconsumed"

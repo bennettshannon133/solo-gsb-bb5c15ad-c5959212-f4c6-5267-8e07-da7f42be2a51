@@ -72,3 +72,34 @@ def test_index_served():
     resp = client.get("/")
     assert resp.status_code == 200
     assert "编织" in resp.text
+
+
+def test_analyze_stitch_changes_payload():
+    resp = client.post("/api/analyze", json={
+        "start_stitches": 10,
+        "rows": ["[inc2]*~4 k4", "k16"],
+    })
+    rows = resp.json()["rows"]
+    row = rows[0]
+    assert row["status"] == "ok"
+    assert row["stitch_changes"] == [
+        {"start": 1, "end": 5, "instruction": "inc2", "executions": 6,
+         "consumed": 6, "produced": 12, "net": 6},
+    ]
+    # 净变化合计与该行产出减消耗核对一致
+    assert row["stitch_net"] == 6 == row["produced"] - row["consumed"]
+    # 纯 k 行生成空清单，净变化为 0
+    assert rows[1]["status"] == "ok"
+    assert rows[1]["stitch_changes"] == [] and rows[1]["stitch_net"] == 0
+
+
+def test_analyze_stitch_changes_absent_for_failed_and_blocked():
+    resp = client.post("/api/analyze", json={
+        "start_stitches": 4,
+        "rows": ["dec5", "inc2"],
+    })
+    rows = resp.json()["rows"]
+    assert rows[0]["status"] == "shortage"
+    assert rows[0]["stitch_changes"] == [] and rows[0]["stitch_net"] is None
+    assert rows[1]["status"] == "blocked"
+    assert rows[1]["stitch_changes"] == [] and rows[1]["stitch_net"] is None

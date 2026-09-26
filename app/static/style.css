@@ -275,6 +275,67 @@ body {
 }
 .trunc-note { font-size: 12px; color: var(--warn); margin-top: 4px; }
 
+/* ---------------- 针数变化来源 ---------------- */
+.stitch-changes { margin-top: 8px; }
+.stitch-changes summary {
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--muted);
+}
+.stitch-changes summary b { font-variant-numeric: tabular-nums; }
+.net-pos { color: var(--ok); font-weight: 700; }
+.net-neg { color: var(--err); font-weight: 700; }
+.sc-check { font-size: 12px; }
+.ok-check { color: var(--ok); }
+.bad-check { color: var(--err); }
+.sc-empty { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+.sc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 6px;
+  background: rgba(255,255,255,.7);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.sc-table th, .sc-table td {
+  padding: 4px 8px;
+  text-align: right;
+  border-bottom: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+.sc-table th:first-child, .sc-table td:first-child { text-align: left; }
+.sc-table thead th { color: var(--muted); font-weight: 600; }
+.sc-table tfoot td {
+  font-weight: 700;
+  border-bottom: none;
+  background: rgba(0,0,0,.04);
+}
+.sc-entry { cursor: pointer; }
+.sc-entry:hover { background: var(--warn-bg); }
+.sc-entry.active { background: #f3e3cf; }
+.sc-inst {
+  font-family: var(--mono);
+  background: var(--bg);
+  padding: 0 5px;
+  border-radius: 4px;
+}
+
+.row-source .locate-hl {
+  background: #ffe1a8;
+  color: #6a4a14;
+  border-radius: 3px;
+  padding: 0 2px;
+  font-weight: 700;
+  box-shadow: 0 0 0 1px var(--warn);
+  animation: locate-pulse .8s ease-out;
+}
+@keyframes locate-pulse {
+  0% { box-shadow: 0 0 0 4px var(--warn); }
+  100% { box-shadow: 0 0 0 1px var(--warn); }
+}
+
 .empty-hint {
   color: var(--muted);
   font-size: 14px;

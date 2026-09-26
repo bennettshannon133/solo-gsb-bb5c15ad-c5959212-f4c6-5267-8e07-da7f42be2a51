@@ -78,6 +78,11 @@ k16                 # 耗 16 产 16
   - 该行不产生产出，**后续行标记为「已阻断」**（可用针数无法确定）。
 - 一行指令全部可执行但**没有把可用针数用完**时：状态为「未全部消耗」，给出未消耗数量（该行仍正常产出，不阻断后续行）。
 - 自适应块 `[...]*~N` 在展开前先做可行性推导：无法整除或保留目标不可达时，在 `*` 运算符位置报错并阻断后续行；推导成功后实际重复次数回填，再参与展开与模拟。
+- **针数变化来源**：通过 / 未全部消耗的行会附带一份清单，按源文本中每处 `incN` / `decN` 的区间汇总**实际执行次数、消耗针数、产出针数与净变化**：
+  - 固定重复块嵌套时执行次数逐层相乘（如 `[[inc2]*2]*3` 中 `inc2` 执行 6 次）；自适应块使用本行推导出的实际重复次数；
+  - 同一源区间的多次执行合并为一条；字面相同但位置不同的指令分列；
+  - 每行显示净变化合计，并与该行「产出 − 消耗」核对；
+  - 针数短缺、语法错误与已阻断的行不生成清单。
 - 语法错误（未闭合的方括号、缺少数字、重复次数为 0、自适应块嵌套等）会在出错列标出 `▲` 并阻断后续行。
 - 单条方案展开后的叶子指令上限为 100,000 条，防止超大重复次数导致的资源问题；界面上超过 200 条时只预览前 200 条并注明总数。
 
@@ -85,6 +90,7 @@ k16                 # 耗 16 产 16
 
 - 左侧：起始针数、逐行指令编辑（添加 / 删除 / 上移 / 下移）、语法帮助；编辑后 250 ms 防抖自动重算，内容自动保存到浏览器 `localStorage`。
 - 右侧：汇总徽标（通过 / 未耗尽 / 短缺 / 语法错误 / 阻断数量与最终针数）与逐行卡片，含行之间的「上一行产出 → 本行可用」流向、消耗 / 产出 / 剩余指标、错误高亮、展开指令列表。
+- 逐行卡片内含「针数变化来源」表格（通过 / 未全部消耗的行）：每处 `incN` / `decN` 一行，列出执行次数、消耗 / 产出针数、净变化，表尾为合计；**点击条目会在源指令文本中高亮定位该指令**（再次点击取消）。
 - 顶部：**载入示例**、**导入 JSON**、**导出 JSON**。
 
 ### 方案 JSON 格式
@@ -166,6 +172,36 @@ curl -s -X POST http://localhost:8000/api/analyze \
 
 无法整除（如 20 针执行 `[k2]*~5`）时返回 `"status": "error"`，`error_pos` 指向 `*`（此处为列 4），错误信息说明剩余针数、目标保留针数、每轮消耗与不可整除关系，后续行为 `"blocked"`。
 
+针数变化来源响应（节选）：通过 / 未全部消耗的行返回 `stitch_changes` 清单与净变化合计 `stitch_net`（`stitch_net` 恒等于该行 `produced - consumed`，前端据此核对）；短缺 / 语法错误 / 阻断行返回空清单且 `stitch_net` 为 `null`：
+
+```bash
+curl -s -X POST http://localhost:8000/api/analyze \
+  -H 'Content-Type: application/json' \
+  -d '{"start_stitches": 10, "rows": ["[inc2]*~4 k4"]}'
+```
+
+```json
+{
+  "status": "ok",
+  "consumed": 10,
+  "produced": 16,
+  "stitch_net": 6,
+  "stitch_changes": [
+    {
+      "start": 1,
+      "end": 5,
+      "instruction": "inc2",
+      "executions": 6,
+      "consumed": 6,
+      "produced": 12,
+      "net": 6
+    }
+  ]
+}
+```
+
+`stitch_changes` 中每个条目对应源文本中一处 `incN` / `decN` 指令（`start` / `end` 为 0 基列区间，前端点击条目即按此区间定位原文）：`executions` 为实际执行次数（固定块逐层相乘、自适应块取推导次数），`consumed` / `produced` 为该区间的合计消耗 / 产出针数，`net` 为净变化（`produced - consumed`）。同一区间的多次执行已合并；字面相同但区间不同的指令分列。
+
 ---
 
 ## 本地开发（不使用 Docker）
@@ -173,19 +209,19 @@ curl -s -X POST http://localhost:8000/api/analyze \
 ```bash
 pip install -r requirements-dev.txt        # 含 pytest / httpx
 uvicorn app.main:app --reload --port 8000  # http://localhost:8000
-pytest -q                                   # 运行测试（47 个用例）
+pytest -q                                   # 运行测试（59 个用例）
 ```
 
 项目结构：
 
 ```text
 app/
-  engine.py           # 解析器（递归下降）、repeat 展开、自适应重复推导、逐行审校
+  engine.py           # 解析器（递归下降）、repeat 展开、自适应重复推导、逐行审校、针数变化来源汇总
   main.py             # FastAPI：/api/analyze、/api/health、静态托管
   static/
     index.html        # 页面结构
     style.css         # 样式
-    app.js            # 编辑器、防抖重算、结果渲染、JSON 导入导出
+    app.js            # 编辑器、防抖重算、结果渲染（含针数变化来源表格与点击定位）、JSON 导入导出
 tests/                # 引擎与 API 测试
 Dockerfile            # 镜像构建（构建时安装依赖）
 docker-entrypoint.sh  # 容器启动初始化自检
